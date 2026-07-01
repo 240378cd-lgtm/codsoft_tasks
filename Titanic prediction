@@ -1,0 +1,137 @@
+# ============================================================
+# TITANIC SURVIVAL PREDICTOR — Google Colab version
+# Paste this entire script into one Colab cell and run it.
+# No deployment, no API, no server — just direct output.
+# ============================================================
+
+!pip install -q scikit-learn pandas
+
+import pandas as pd
+import numpy as np
+import urllib.request
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+
+# ---------------------------------------------------------------
+# 1. LOAD DATA
+# ---------------------------------------------------------------
+url = "https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv"
+urllib.request.urlretrieve(url, "titanic.csv")
+df = pd.read_csv("titanic.csv")
+print("Loaded:", df.shape)
+
+# ---------------------------------------------------------------
+# 2. FEATURE ENGINEERING
+# ---------------------------------------------------------------
+data = df.copy()
+data["Title"] = data["Name"].str.extract(r",\s*([^\.]*)\.")
+title_map = {
+    "Mlle": "Miss", "Ms": "Miss", "Mme": "Mrs",
+    "Lady": "Rare", "Countess": "Rare", "Capt": "Rare", "Col": "Rare",
+    "Don": "Rare", "Dr": "Rare", "Major": "Rare", "Rev": "Rare",
+    "Sir": "Rare", "Jonkheer": "Rare", "Dona": "Rare"
+}
+data["Title"] = data["Title"].replace(title_map)
+data["Title"] = data["Title"].where(data["Title"].isin(["Mr","Mrs","Miss","Master","Rare"]), "Rare")
+
+data["FamilySize"] = data["SibSp"] + data["Parch"] + 1
+data["IsAlone"] = (data["FamilySize"] == 1).astype(int)
+data["Age"] = data.groupby("Title")["Age"].transform(lambda x: x.fillna(x.median()))
+data["Embarked"] = data["Embarked"].fillna(data["Embarked"].mode()[0])
+data["Fare"] = data["Fare"].fillna(data["Fare"].median())
+data["AgeBin"] = pd.cut(data["Age"], bins=[0,12,18,35,60,100],
+                         labels=["Child","Teen","Adult","MiddleAge","Senior"])
+data["FareBin"] = pd.qcut(data["Fare"], 4, labels=["Low","Mid","High","VeryHigh"])
+data = data.drop(columns=["PassengerId","Name","Ticket","Cabin"])
+
+cat_cols = ["Sex","Embarked","Title","AgeBin","FareBin"]
+data = pd.get_dummies(data, columns=cat_cols, drop_first=True)
+
+X = data.drop(columns=["Survived"])
+y = data["Survived"]
+feature_columns = list(X.columns)
+
+# ---------------------------------------------------------------
+# 3. TRAIN MODEL
+# ---------------------------------------------------------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+scaler = StandardScaler()
+X_train_s = scaler.fit_transform(X_train)
+X_test_s = scaler.transform(X_test)
+
+model = LogisticRegression(max_iter=1000, random_state=42)
+model.fit(X_train_s, y_train)
+acc = accuracy_score(y_test, model.predict(X_test_s))
+print(f"Model trained. Test accuracy: {acc:.4f}\n")
+
+# ---------------------------------------------------------------
+# 4. PREDICTION HELPER
+# ---------------------------------------------------------------
+def predict_passenger(Pclass, Sex, Age, Fare, SibSp=0, Parch=0, Embarked="S", Title=None):
+    if Title is None:
+        if Sex == "male":
+            Title = "Master" if Age < 16 else "Mr"
+        else:
+            Title = "Mrs" if (SibSp > 0 or Parch > 0) else "Miss"
+    Title = title_map.get(Title, Title)
+    if Title not in ["Mr","Mrs","Miss","Master","Rare"]:
+        Title = "Rare"
+
+    FamilySize = SibSp + Parch + 1
+    IsAlone = 1 if FamilySize == 1 else 0
+
+    if Age <= 12: AgeBin = None
+    elif Age <= 18: AgeBin = "Teen"
+    elif Age <= 35: AgeBin = "Adult"
+    elif Age <= 60: AgeBin = "MiddleAge"
+    else: AgeBin = "Senior"
+
+    if Fare <= 7.91: FareBin = None
+    elif Fare <= 14.45: FareBin = "Mid"
+    elif Fare <= 31: FareBin = "High"
+    else: FareBin = "VeryHigh"
+
+    row = {col: 0 for col in feature_columns}
+    row["Pclass"] = Pclass
+    row["Age"] = Age
+    row["SibSp"] = SibSp
+    row["Parch"] = Parch
+    row["Fare"] = Fare
+    row["FamilySize"] = FamilySize
+    row["IsAlone"] = IsAlone
+
+    if Sex == "male" and "Sex_male" in row: row["Sex_male"] = 1
+    if f"Embarked_{Embarked}" in row: row[f"Embarked_{Embarked}"] = 1
+    if f"Title_{Title}" in row: row[f"Title_{Title}"] = 1
+    if AgeBin and f"AgeBin_{AgeBin}" in row: row[f"AgeBin_{AgeBin}"] = 1
+    if FareBin and f"FareBin_{FareBin}" in row: row[f"FareBin_{FareBin}"] = 1
+
+    X_row = pd.DataFrame([row], columns=feature_columns)
+    X_scaled = scaler.transform(X_row)
+    pred = int(model.predict(X_scaled)[0])
+    proba = float(model.predict_proba(X_scaled)[0][1])
+
+    print(f"Prediction: {'SURVIVED' if pred else 'DID NOT SURVIVE'}")
+    print(f"Survival probability: {proba*100:.1f}%")
+    return pred, proba
+
+# ---------------------------------------------------------------
+# 5. EXAMPLE — EDIT THESE VALUES AND RE-RUN THIS CELL
+# ---------------------------------------------------------------
+print("=" * 50)
+print("EXAMPLE PREDICTION")
+print("=" * 50)
+predict_passenger(
+    Pclass=1,        # 1, 2, or 3
+    Sex="female",     # "male" or "female"
+    Age=29,
+    Fare=100,
+    SibSp=0,
+    Parch=0,
+    Embarked="S",      # "S", "C", or "Q"
+    Title="Miss"        # "Mr","Mrs","Miss","Master","Rare" (optional)
+)
